@@ -1,0 +1,4 @@
+users:
+- name: john
+  roles:
+  - api

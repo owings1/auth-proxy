@@ -1,6 +1,6 @@
+#.git
 node_modules
 /coverage
-.nyc_output
+/test
 /tmp
 /dist
-/local

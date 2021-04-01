@@ -1,0 +1,30 @@
+{
+  "name": "auth-proxy",
+  "version": "0.0.1",
+  "description": "simple auth proxy",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "merge": "^2.1.1",
+    "yaml": "^1.10.2"
+  },
+  "devDependencies": {
+    "chai": "^4.3.4",
+    "mocha": "^8.3.2",
+    "node-fetch": "^2.6.1",
+    "nyc": "^15.1.0",
+    "tmp": "^0.1.0"
+  },
+  "scripts": {
+    "test": "nyc --reporter=text-summary mocha test/test.js && nyc report --reporter=lcov"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@git.int.dougowings.net:owings/auth-proxy.git"
+  },
+  "author": "Doug Owings <doug@dougowings.net>",
+  "license": "MIT"
+}

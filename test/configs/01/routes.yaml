@@ -1,0 +1,6 @@
+routes:
+- path: /
+  resource: api
+  methods: ["GET", "HEAD", "POST"]
+  proxy:
+    target: http://localhost:8081

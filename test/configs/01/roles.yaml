@@ -1,0 +1,5 @@
+roles:
+- name: api-readonly
+  grants:
+  - resource: api
+    methods: ["GET", "HEAD"]
