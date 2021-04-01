@@ -1,0 +1,12 @@
+image: node:alpine
+
+stages:
+  - test
+
+test:
+  stage: test
+  tags:
+    - docker
+  script:
+    - npm install
+    - npm test
