@@ -3,3 +3,9 @@ roles:
   grants:
   - resource: api
     methods: ["GET", "HEAD"]
+- name: api-all
+  grants:
+  - resource: api
+- name: just-george
+  grants:
+  - resource: george

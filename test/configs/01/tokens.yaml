@@ -1,3 +1,9 @@
 tokens:
 - user: john
   token: yhmYJA8JhX75bD877fQvBcDWBA3PXRCg
+- user: alice
+  token: B73XLv8QuygG5f629Ja4rYJfEBnyNzVY
+- user: bob
+  token: nEmzFSdB7ujfczSSrwKYMXjajUwux5FX
+- user: george
+  token: UYYw2Sa8DHPL56xh5WJJ4jccPp7YDwSZ

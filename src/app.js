@@ -1,11 +1,44 @@
-const fs    = require('fs').promises
-const http  = require('http')
+/**
+ * auth-proxy
+ *
+ * Copyright (c) 2021 Doug Owings
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * @author Doug Owings <doug@dougowings.net>
+ */
+const fs        = require('fs').promises
+const http      = require('http')
 const httpProxy = require('http-proxy')
-const merge = require('merge')
-const path  = require('path')
-const YAML  = require('yaml')
+const merge     = require('merge')
+const path      = require('path')
+const YAML      = require('yaml')
 
 const {resolve} = path
+
+function log(...args) {
+    console.log(new Date, ...args)
+}
+
+function error(...args) {
+    console.error(new Date, ...args)
+}
 
 class App {
 
@@ -23,16 +56,32 @@ class App {
             configDir,
             reloadIntervalMs,
             port        : +env.HTTP_PORT || 8080,
-            tokensFile  : resolve(configDir, env.TOKENS_FILE || 'tokens.yaml'),
-            usersFile   : resolve(configDir, env.USERS_FILE  || 'users.yaml'),
-            routesFile  : resolve(configDir, env.ROUTES_FILE || 'routes.yaml'),
-            rolesFile   : resolve(configDir, env.ROLES_FILE  || 'roles.yaml'),
-            authHeaders : headersStr.split(',').map(it => it.trim().toLowerCase())
+            authHeaders : headersStr.split(',').map(it => it.trim().toLowerCase()),
+            quiet       : false
         }
     }
 
+    log(...args) {
+        if (!this.opts.quiet) {
+            log(...args)
+        }
+    }
+
+    error(...args) {
+        error(...args)
+    }
+
     constructor(opts, env) {
+
+        env = env || process.env
+
         this.opts = merge({}, App.defaults(env), opts)
+        
+        this.opts.tokensFile = this.opts.tokensFile || resolve(this.opts.configDir, env.TOKENS_FILE || 'tokens.yaml')
+        this.opts.usersFile  = this.opts.usersFile  || resolve(this.opts.configDir, env.USERS_FILE  || 'users.yaml')
+        this.opts.routesFile = this.opts.routesFile || resolve(this.opts.configDir, env.ROUTES_FILE || 'routes.yaml')
+        this.opts.rolesFile  = this.opts.rolesFile  || resolve(this.opts.configDir, env.ROLES_FILE  || 'roles.yaml')
+
         this.tokens = null
         this.users  = null
         this.routes = null
@@ -41,37 +90,57 @@ class App {
         this.tokenIndex = null
         this.roleIndex = null
         this.userIndex = null
+        this.grantIndex = null
 
-        this.lastReloadTime = null
+        this.lastReloadTime  = null
         this.lastReloadMTime = null
-        this.reloadInterval = null
-        this.isReloading = false
+        this.reloadInterval  = null
+        this.isReloading     = false
+
         this.httpServer = http.createServer((req, res) => {
-            this.serve(req, res)
+            try {
+                this.serve(req, res)
+            } catch (err) {
+                this.error(err)
+                try {
+                    res.writeHead(500).end('500 Internal Error')
+                } catch (err) {
+                    this.error(err)
+                }
+            }
         })
+
         this.httpProxy = httpProxy.createProxyServer()
     }
 
     serve(req, res) {
 
-        const {route, matches} = this.getRoute(req.method, req.url)
-        if (!route) {
+        const routeInfo = this.getRoute(req.method, req.url)
+        
+        if (!routeInfo) {
             res.writeHead(404).end('404 Not Found')
             return
         }
+        const {route, matches} = routeInfo
 
-        console.log({route, headers: req.headers})
-
-        if (!route.anonymous) {
+        if (route.anonymous) {
+            var user = 'anonymous'
+        } else {
             // authenticate user
-            const user = this.authenticate(req)
+            var user = this.authenticate(req)
             if (!user) {
                 res.writeHead(401).end('401 Unauthorized')
                 return
             }
             // authorize
             const auth = this.authorize(user, route.resource, req.method)
+            if (!auth) {
+                res.writeHead(403).end('403 Forbidden')
+                return
+            }
         }
+
+        this.log({user}, [req.method, route.resource])
 
         this.httpProxy.web(req, res, {target: route.proxy.target})
     }
@@ -86,6 +155,7 @@ class App {
             }, Math.max(this.opts.reloadIntervalMs, 1000))
         }
         this.httpServer.listen(this.opts.port)
+        this.log('Listening', this.httpServer.address())
     }
 
     close() {
@@ -108,27 +178,23 @@ class App {
     }
 
     authorize(user, resource, method) {
-        if (!this.userIndex[user]) {
+        if (!this.grantIndex[user]) {
             return false
         }
-        for (var roleName of this.userIndex[user].roles) {
-            if (roleName in this.roleIndex) {
-                var role = this.roleIndex[roleName]
-                for (var grant of role.grants) {
-                    if (grant.resource == resource) {
-                        if (!grant.methods || grant.methods.indexOf(method) > -1) {
-                            return true
-                        }
-                    }
-                }
-            }
+        if (!this.grantIndex[user][resource]) {
+            return false
         }
-        return false
+        if (this.grantIndex[user][resource]['*']) {
+            return true
+        }
+        return !!this.grantIndex[user][resource][method]
     }
 
     getRoute(method, path) {
+        
         for (var route of this.routes) {
             var isMethodMatch = !route.methods || route.methods.indexOf(method) > -1
+            //log({method}, route)
             if (!isMethodMatch) {
                 continue
             }
@@ -161,7 +227,17 @@ class App {
     }
 
     validateUser(user) {
-        
+        if (typeof user.name != 'string' || !user.name.length) {
+            throw new ConfigError('user.name must be a non-empty string')
+        }
+        if (!Array.isArray(user.roles)) {
+            throw new ConfigError('user.roles must be an array')
+        }
+        for (var roleName of user.roles) {
+            if (typeof roleName != 'string' || !roleName.length) {
+                throw new ConfigError('user role name must be a non-empty string')
+            }
+        }
     }
 
     validateRole(role) {
@@ -194,21 +270,18 @@ class App {
 
         try {
 
-            // TODO: check async handle.stat()  .mtimeMs
-            const mtimes = [
+            const maxMTime = Math.max(...[
                 (await routesHandle.stat()).mtimeMs,
                 (await usersHandle.stat()).mtimeMs,
                 (await rolesHandle.stat()).mtimeMs,
                 (await tokensHandle.stat()).mtimeMs
-            ]
-
-            const maxMTime = Math.max(...mtimes)
+            ])
 
             if (this.lastReloadMTime && this.lastReloadMTime == maxMTime) {
                 return
             }
 
-            console.log({lastReloadMTime: this.lastReloadMTime, maxMTime})
+            this.log({lastReloadMTime: this.lastReloadMTime, maxMTime})
 
             this.lastReloadMTime = maxMTime
 
@@ -239,15 +312,24 @@ class App {
             tokensObj.tokens.forEach(token => this.validateToken(token))
             const tokenIndex = this.getTokenIndex(tokensObj.tokens)
 
+            const grantIndex = this.getGrantIndex(userIndex, roleIndex)
+
             this.routes = routesObj.routes
             this.users  = usersObj.users
             this.roles  = rolesObj.roles
             this.tokens = tokensObj.tokens
+
             this.tokenIndex = tokenIndex
             this.roleIndex = roleIndex
             this.userIndex = userIndex
+            this.grantIndex = grantIndex
 
-            console.log('Config reloaded')
+            this.log('Config reloaded', {
+                routes : this.routes.length,
+                roles  : this.roles.length,
+                users  : this.users.length,
+                tokens : this.tokens.length
+            })
 
         } catch (err) {
 
@@ -257,7 +339,7 @@ class App {
                 throw err
             }
 
-            console.error(err)
+            error(err)
 
         } finally {
 
@@ -272,6 +354,7 @@ class App {
         }
     }
 
+    // {token: userName}
     getTokenIndex(tokens) {
         const index = {}
         for (var token of tokens) {
@@ -283,6 +366,7 @@ class App {
         return index
     }
 
+    // {roleName: roleObj}
     getRoleIndex(roles) {
         const index = {}
         for (var role of roles) {
@@ -294,6 +378,7 @@ class App {
         return index
     }
 
+    // {userName: userObj}
     getUserIndex(users) {
         const index = {}
         for (var user of users) {
@@ -301,6 +386,32 @@ class App {
                 throw new ConfigError('Duplicate user name found for ' + user.name)
             }
             index[user.name] = user
+        }
+        return index
+    }
+
+    // {userName: {resource: {method: true}}}
+    getGrantIndex(userIndex, roleIndex) {
+        const index = {}
+        for (var [userName, user] of Object.entries(userIndex)) {
+            index[userName] = {}
+            for (var roleName of user.roles) {
+                var role = roleIndex[roleName]
+                if (role) {
+                    for (var grant of role.grants) {
+                        if (!index[userName][grant.resource]) {
+                            index[userName][grant.resource] = {}
+                        }
+                        if (grant.methods) {
+                            for (var method of grant.methods) {
+                                index[userName][grant.resource][method] = true
+                            }
+                        } else {
+                            index[userName][grant.resource]['*'] = true
+                        }
+                    }
+                }
+            }
         }
         return index
     }

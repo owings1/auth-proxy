@@ -1,6 +1,15 @@
 routes:
+- path: /public($|/)
+  resource: public-api
+  anonymous: true
+  proxy:
+    target: dummy-target
+- path: /george
+  resource: george
+  proxy:
+    target: dummy-target
 - path: /
   resource: api
-  methods: ["GET", "HEAD", "POST"]
+  methods: ["GET", "POST", "PUT"]
   proxy:
-    target: http://localhost:8081
+    target: dummy-target

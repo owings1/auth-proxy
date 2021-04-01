@@ -1,4 +1,10 @@
 users:
 - name: john
   roles:
-  - api
+  - api-readonly
+- name: alice
+  roles:
+  - api-all
+- name: george
+  roles:
+  - just-george
