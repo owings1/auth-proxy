@@ -28,6 +28,7 @@ const http      = require('http')
 const httpProxy = require('http-proxy')
 const merge     = require('merge')
 const path      = require('path')
+const prom      = require('prom-client')
 const YAML      = require('yaml')
 
 const {resolve} = path
@@ -38,6 +39,20 @@ function log(...args) {
 
 function error(...args) {
     console.error(new Date, ...args)
+}
+
+prom.collectDefaultMetrics()
+const metrics = {
+    proxyRequests: new prom.Counter({
+        name: 'proxy_requests_total',
+        help: 'Total http proxy requests',
+        labelNames: ['code', 'resource']
+    }),
+    internalErrors: new prom.Counter({
+        name: 'internal_errors_total',
+        help: 'Total internal errors',
+        labelNames: ['code']
+    })
 }
 
 class App {
@@ -55,9 +70,10 @@ class App {
         return {
             configDir,
             reloadIntervalMs,
-            port        : +env.HTTP_PORT || 8080,
-            authHeaders : headersStr.split(',').map(it => it.trim().toLowerCase()),
-            quiet       : false
+            port         : +env.HTTP_PORT || 8080,
+            metricsPort : +env.METRICS_PORT | 8181,
+            authHeaders  : headersStr.split(',').map(it => it.trim().toLowerCase()),
+            quiet        : false
         }
     }
 
@@ -97,20 +113,35 @@ class App {
         this.reloadInterval  = null
         this.isReloading     = false
 
-        this.httpServer = http.createServer((req, res) => {
+        const createServer = handler => http.createServer((req, res) => {
             try {
-                this.serve(req, res)
+                handler(req, res)
             } catch (err) {
                 this.error(err)
                 try {
+                    metrics.internalErrors.inc({code: 500})
                     res.writeHead(500).end('500 Internal Error')
                 } catch (err) {
                     this.error(err)
                 }
             }
+            
         })
 
+        this.httpServer = createServer((req, res) => this.serve(req, res))
+
         this.httpProxy = httpProxy.createProxyServer()
+        this.httpProxy.on('error', (err, req, res) => {
+            this.log(err.message, [req.method, req.resource, req.target])
+            res.writeHead(502).end('502 Bad Gateway')
+            metrics.proxyRequests.inc({code: 502, resource: req.resource})
+        })
+        this.httpProxy.on('proxyRes', (proxyRes, req, res) => {
+            metrics.proxyRequests.inc({code: 302, resource: req.resource})
+        })
+
+
+        this.metricsServer = createServer((req, res) => this.serveMetrics(req, res))
     }
 
     serve(req, res) {
@@ -118,23 +149,27 @@ class App {
         const routeInfo = this.getRoute(req.method, req.url)
         
         if (!routeInfo) {
+            metrics.proxyRequests.inc({code: 404})
             res.writeHead(404).end('404 Not Found')
             return
         }
         const {route, matches} = routeInfo
 
+        req.resource = route.resource
+
         if (route.anonymous) {
             var user = 'anonymous'
         } else {
-            // authenticate user
+            // authenticate
             var user = this.authenticate(req)
             if (!user) {
+                metrics.proxyRequests.inc({code: 401, resource: route.resource})
                 res.writeHead(401).end('401 Unauthorized')
                 return
             }
             // authorize
-            const auth = this.authorize(user, route.resource, req.method)
-            if (!auth) {
+            if (!this.authorize(user, route.resource, req.method)) {
+                metrics.proxyRequests.inc({code: 403, resource: route.resource})
                 res.writeHead(403).end('403 Forbidden')
                 return
             }
@@ -142,7 +177,18 @@ class App {
 
         this.log({user}, [req.method, route.resource])
 
-        this.httpProxy.web(req, res, {target: route.proxy.target})
+        req.target = route.proxy.target
+        this.httpProxy.web(req, res, {target: req.target})
+        
+    }
+
+    serveMetrics(req, res) {
+        if (req.url == '/ready') {
+            res.writeHead(200).end('OK Ready')
+            return
+        }
+        res.setHeader('content-type', prom.register.contentType)
+        prom.register.metrics().then(metrics => res.writeHead(200).end(metrics))
     }
 
     async start() {
@@ -155,14 +201,15 @@ class App {
             }, Math.max(this.opts.reloadIntervalMs, 1000))
         }
         this.httpServer.listen(this.opts.port)
-        this.log('Listening', this.httpServer.address())
+        this.log('Proxy listening', this.httpServer.address())
+        this.metricsServer.listen(this.opts.metricsPort)
+        this.log('Metrics listening', this.metricsServer.address())
     }
 
     close() {
         clearInterval(this.reloadInterval)
-        if (this.httpServer) {
-            this.httpServer.close()
-        }
+        this.httpServer.close()
+        this.metricsServer.close()
     }
 
     authenticate(req) {
@@ -194,7 +241,6 @@ class App {
         
         for (var route of this.routes) {
             var isMethodMatch = !route.methods || route.methods.indexOf(method) > -1
-            //log({method}, route)
             if (!isMethodMatch) {
                 continue
             }
@@ -280,8 +326,6 @@ class App {
             if (this.lastReloadMTime && this.lastReloadMTime == maxMTime) {
                 return
             }
-
-            this.log({lastReloadMTime: this.lastReloadMTime, maxMTime})
 
             this.lastReloadMTime = maxMTime
 
