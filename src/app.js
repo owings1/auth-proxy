@@ -228,6 +228,9 @@ class App {
     }
 
     authorize(user, resource, method) {
+        if (this.userIndex[user] && this.userIndex[user].admin) {
+            return true
+        }
         if (!this.grantIndex[user]) {
             return false
         }
@@ -316,12 +319,19 @@ class App {
         if (typeof user.name != 'string' || !user.name.length) {
             throw new ConfigError('user.name must be a non-empty string')
         }
-        if (!Array.isArray(user.roles)) {
-            throw new ConfigError('user.roles must be an array')
+        if ('roles' in user) {
+            if (!Array.isArray(user.roles)) {
+                throw new ConfigError('user.roles must be an array')
+            }
+            for (var roleName of user.roles) {
+                if (typeof roleName != 'string' || !roleName.length) {
+                    throw new ConfigError('user role name must be a non-empty string')
+                }
+            }
         }
-        for (var roleName of user.roles) {
-            if (typeof roleName != 'string' || !roleName.length) {
-                throw new ConfigError('user role name must be a non-empty string')
+        if ('admin' in user) {
+            if (typeof user.admin != 'boolean') {
+                throw new ConfigError('user.admin must be a boolean')
             }
         }
     }
@@ -478,6 +488,9 @@ class App {
     getGrantIndex(userIndex, roleIndex) {
         const index = {}
         for (var [userName, user] of Object.entries(userIndex)) {
+            if (user.admin) {
+                continue
+            }
             index[userName] = {}
             for (var roleName of user.roles) {
                 var role = roleIndex[roleName]

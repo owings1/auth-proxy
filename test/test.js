@@ -311,10 +311,10 @@ describe('app', () => {
             expect(err.name).to.equal('ConfigError')
         })
 
-        it('should throw on missing roles', () => {
-            const err = getError(() => app.validateUser({name: 'john'}))
-            expect(err.name).to.equal('ConfigError')
-        })
+        //it('should throw on missing roles', () => {
+        //    const err = getError(() => app.validateUser({name: 'john'}))
+        //    expect(err.name).to.equal('ConfigError')
+        //})
 
         it('should throw on missing role name', () => {
             const err = getError(() => app.validateUser({name: 'john', roles:[{}]}))

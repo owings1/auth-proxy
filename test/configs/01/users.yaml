@@ -8,3 +8,5 @@ users:
 - name: george
   roles:
   - just-george
+- name: admin
+  admin: true
