@@ -1,6 +1,6 @@
 {
   "name": "auth-proxy",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "simple auth proxy",
   "main": "index.js",
   "directories": {
