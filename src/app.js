@@ -131,8 +131,8 @@ class App {
         this.httpServer = createServer((req, res) => this.serve(req, res))
 
         this.httpProxy = httpProxy.createProxyServer({
-            xfwd: true,
-            changeOrigin: true
+            xfwd: true
+            //changeOrigin: true
         })
         this.httpProxy.on('error', (err, req, res) => {
             this.log(err.message, [req.method, req.resource, req.target])
