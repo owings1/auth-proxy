@@ -1,13 +1,25 @@
 routes:
+
 - path: /public($|/)
   resource: public-api
   anonymous: true
   proxy:
     target: dummy-target
+
+- path: /hostroute
+  resource: public-api
+  anonymous: true
+  hosts:
+  - host1\.example
+  - host2\.example
+  proxy:
+    target: dummy-target
+
 - path: /george
   resource: george
   proxy:
     target: dummy-target
+
 - path: /
   resource: api
   methods: ["GET", "POST", "PUT"]

@@ -3,7 +3,8 @@ require('http').createServer((req, res) => {
     res.writeHead(200)
     console.log({
         url: req.url,
-        method: req.method
+        method: req.method,
+        headers: req.headers
     })
     res.end('Upstream OK')
 }).listen(port)

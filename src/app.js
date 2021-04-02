@@ -130,7 +130,10 @@ class App {
 
         this.httpServer = createServer((req, res) => this.serve(req, res))
 
-        this.httpProxy = httpProxy.createProxyServer()
+        this.httpProxy = httpProxy.createProxyServer({
+            xfwd: true,
+            changeOrigin: true
+        })
         this.httpProxy.on('error', (err, req, res) => {
             this.log(err.message, [req.method, req.resource, req.target])
             res.writeHead(502).end('502 Bad Gateway')
@@ -146,7 +149,7 @@ class App {
 
     serve(req, res) {
 
-        const routeInfo = this.getRoute(req.method, req.url)
+        const routeInfo = this.getRoute(req.method, req.url, req.headers.host)
         
         if (!routeInfo) {
             metrics.proxyRequests.inc({code: 404})
@@ -237,12 +240,29 @@ class App {
         return !!this.grantIndex[user][resource][method]
     }
 
-    getRoute(method, path) {
-        
+    getRoute(method, path, host) {
+
+        if (typeof host != 'string') {
+            host = ''
+        }
+
         for (var route of this.routes) {
             var isMethodMatch = !route.methods || route.methods.indexOf(method) > -1
             if (!isMethodMatch) {
                 continue
+            }
+            var isHostMatch = !route.hosts
+            if (!isHostMatch) {
+                for (var hostPattern of route.hosts) {
+                    var hostRegex = new RegExp(hostPattern)
+                    if (hostRegex.test(host)) {
+                        isHostMatch = true
+                        break
+                    }
+                }
+                if (!isHostMatch) {
+                    continue
+                }
             }
             var matches = path.match(new RegExp(route.path))
             if (matches) {
@@ -255,11 +275,31 @@ class App {
         if (typeof route.path != 'string' || !route.path.length) {
             throw new ConfigError('route.path must be a non-empty string')
         }
+        try {
+            new RegExp(route.path)
+        } catch (err) {
+            throw new ConfigError('Invalid regex for route.path: ' + err.message)
+        }
         if (typeof route.proxy != 'object' || Array.isArray(route.proxy)) {
             throw new ConfigError('route.proxy must be an object')
         }
         if (typeof route.proxy.target != 'string' || !route.proxy.target.length) {
             throw new ConfigError('route.proxy.target must be a non-empty string')
+        }
+        if ('hosts' in route) {
+            if (!Array.isArray(route.hosts)) {
+                throw new ConfigError('route.hosts must be an array')
+            }
+            for (var hostPattern of route.hosts) {
+                if (typeof hostPattern != 'string' || !hostPattern.length) {
+                    throw new ConfigError('host must be a non-empty string')
+                }
+                try {
+                    new RegExp(hostPattern)
+                } catch (err) {
+                    throw new ConfigError('Invalid regex for host: ' + err.message)
+                }
+            }
         }
     }
 

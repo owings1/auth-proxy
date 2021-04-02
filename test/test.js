@@ -160,6 +160,25 @@ describe('proxy', () => {
             })
             expect(res.status).to.equal(200)
         })
+
+        it('should return 200 for GET /hostroute for host1.example', async () => {
+            const res = await fetch(appUrl + '/hostroute', {
+                headers: {host: 'host1.example'}
+            })
+            expect(res.status).to.equal(200)
+        })
+
+        it('should return 200 for GET /hostroute for host2.example', async () => {
+            const res = await fetch(appUrl + '/hostroute', {
+                headers: {host: 'host2.example'}
+            })
+            expect(res.status).to.equal(200)
+        })
+
+        it('should return 401 for GET /hostroute with no host set', async () => {
+            const res = await fetch(appUrl + '/hostroute')
+            expect(res.status).to.equal(401)
+        })
     })
 })
 
@@ -217,6 +236,15 @@ describe('app', () => {
             expect(err.name).to.equal('ConfigError')
         })
 
+        it('should throw for invalid path regex', () => {
+            const err = getError(() => app.validateRoute({
+                path: 'sadf(.*',
+                proxy: {target: 'foo.example'},
+                resource: 'api'
+            }))
+            expect(err.name).to.equal('ConfigError')
+        })
+
         it('should throw on missing proxy', () => {
             const err = getError(() => app.validateRoute({path: '/'}))
             expect(err.name).to.equal('ConfigError')
@@ -229,6 +257,36 @@ describe('app', () => {
 
         it('should throw on missing proxy target', () => {
             const err = getError(() => app.validateRoute({path: '/', proxy: {}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on null hosts', () => {
+            const err = getError(() => app.validateRoute({
+                path: '/',
+                proxy: {target: 'foo.example'},
+                resource: 'api',
+                hosts: null
+            }))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw for invalid host', () => {
+            const err = getError(() => app.validateRoute({
+                path: '/',
+                proxy: {target: 'foo.example'},
+                resource: 'api',
+                hosts: [1]
+            }))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw for invalid host regex', () => {
+            const err = getError(() => app.validateRoute({
+                path: '/',
+                proxy: {target: 'foo.example'},
+                resource: 'api',
+                hosts: ['asdf(.*']
+            }))
             expect(err.name).to.equal('ConfigError')
         })
     })
