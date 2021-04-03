@@ -20,6 +20,18 @@ routes:
   proxy:
     target: dummy-target
 
+- path: /health
+  anonymous: true
+  resource: health
+  fixedResponse:
+    code: 200
+    text: '200 HEALTH OK'
+
+- path: /noprepend
+  anonymous: true
+  proxy:
+    target: dummy-target/foo
+
 - path: /
   resource: api
   methods: ["GET", "POST", "PUT"]

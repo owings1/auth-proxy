@@ -23,6 +23,9 @@
  *
  * @author Doug Owings <doug@dougowings.net>
  */
+
+// TODO: url re-writing
+
 const fs        = require('fs').promises
 const http      = require('http')
 const httpProxy = require('http-proxy')
@@ -93,10 +96,7 @@ class App {
 
         this.opts = merge({}, App.defaults(env), opts)
         
-        this.opts.tokensFile = this.opts.tokensFile || resolve(this.opts.configDir, env.TOKENS_FILE || 'tokens.yaml')
-        this.opts.usersFile  = this.opts.usersFile  || resolve(this.opts.configDir, env.USERS_FILE  || 'users.yaml')
-        this.opts.routesFile = this.opts.routesFile || resolve(this.opts.configDir, env.ROUTES_FILE || 'routes.yaml')
-        this.opts.rolesFile  = this.opts.rolesFile  || resolve(this.opts.configDir, env.ROLES_FILE  || 'roles.yaml')
+        this.setConfigFiles(env)
 
         this.tokens = null
         this.users  = null
@@ -113,7 +113,24 @@ class App {
         this.reloadInterval  = null
         this.isReloading     = false
 
-        const createServer = handler => http.createServer((req, res) => {
+        this.httpServer = this.createServer((req, res) => this.serve(req, res))
+        this.metricsServer = this.createServer((req, res) => this.serveMetrics(req, res))
+
+        this.httpProxy = httpProxy.createProxyServer()
+
+        this.httpProxy.on('error', (err, req, res) => {
+            this.log(err.message, [req.method, req.resource, req.target])
+            res.writeHead(502).end('502 Bad Gateway')
+            metrics.proxyRequests.inc({code: 502, resource: req.resource})
+        })
+
+        this.httpProxy.on('proxyRes', (proxyRes, req, res) => {
+            metrics.proxyRequests.inc({code: 302, resource: req.resource})
+        })
+    }
+
+    createServer(handler) {
+        return http.createServer((req, res) => {
             try {
                 handler(req, res)
             } catch (err) {
@@ -125,26 +142,7 @@ class App {
                     this.error(err)
                 }
             }
-            
         })
-
-        this.httpServer = createServer((req, res) => this.serve(req, res))
-
-        this.httpProxy = httpProxy.createProxyServer({
-            xfwd: true
-            //changeOrigin: true
-        })
-        this.httpProxy.on('error', (err, req, res) => {
-            this.log(err.message, [req.method, req.resource, req.target])
-            res.writeHead(502).end('502 Bad Gateway')
-            metrics.proxyRequests.inc({code: 502, resource: req.resource})
-        })
-        this.httpProxy.on('proxyRes', (proxyRes, req, res) => {
-            metrics.proxyRequests.inc({code: 302, resource: req.resource})
-        })
-
-
-        this.metricsServer = createServer((req, res) => this.serveMetrics(req, res))
     }
 
     serve(req, res) {
@@ -153,6 +151,7 @@ class App {
         
         if (!routeInfo) {
             metrics.proxyRequests.inc({code: 404})
+            this.log({code: 404, method: req.method, url: req.url})
             res.writeHead(404).end('404 Not Found')
             return
         }
@@ -167,22 +166,42 @@ class App {
             var user = this.authenticate(req)
             if (!user) {
                 metrics.proxyRequests.inc({code: 401, resource: route.resource})
+                this.log({code: 401, method: req.method, resource: route.resource})
                 res.writeHead(401).end('401 Unauthorized')
                 return
             }
             // authorize
             if (!this.authorize(user, route.resource, req.method)) {
                 metrics.proxyRequests.inc({code: 403, resource: route.resource})
+                this.log({code: 403, method: req.method, resource: route.resource, user})
                 res.writeHead(403).end('403 Forbidden')
                 return
             }
         }
 
-        this.log({user}, [req.method, route.resource])
+        this.log({user}, {method: req.method, resource: route.resource})
 
-        req.target = route.proxy.target
-        this.httpProxy.web(req, res, {target: req.target})
-        
+        if (route.fixedResponse) {
+            metrics.proxyRequests.inc({code: route.fixedResponse.code, resource: route.resource})
+            res.writeHead(route.fixedResponse.code).end(route.fixedResponse.text)
+        } else {
+
+            req.target = route.proxy.target
+
+            // https://www.npmjs.com/package/http-proxy#options
+            const proxyOpts = {
+                // default true
+                prependPath  : ('prependPath' in route.proxy) ? !!route.proxy.prependPath : true,
+                xfwd         : ('xfwd' in route.proxy)        ? !!route.proxy.xfwd        : true,
+                // default false
+                autoRewrite  : !!route.proxy.autoRewrite,
+                ignorePath   : !!route.proxy.ignorePath,
+                changeOrigin : !!route.proxy.changeOrigin
+            }
+
+            this.httpProxy.web(req, res, {...proxyOpts, target: req.target})
+
+        }
     }
 
     serveMetrics(req, res) {
@@ -283,12 +302,38 @@ class App {
         } catch (err) {
             throw new ConfigError('Invalid regex for route.path: ' + err.message)
         }
-        if (typeof route.proxy != 'object' || Array.isArray(route.proxy)) {
-            throw new ConfigError('route.proxy must be an object')
+        if (!('proxy' in route) && !('fixedResponse' in route)) {
+            throw new ConfigError('route must contain either proxy or fixedResponse')
         }
-        if (typeof route.proxy.target != 'string' || !route.proxy.target.length) {
-            throw new ConfigError('route.proxy.target must be a non-empty string')
+        if (('proxy' in route) && ('fixedResponse' in route)) {
+            throw new ConfigError('route must contain only one of proxy or fixedResponse')
         }
+        if ('proxy' in route) {
+            if (typeof route.proxy != 'object' || Array.isArray(route.proxy)) {
+                throw new ConfigError('route.proxy must be an object')
+            }
+            if (typeof route.proxy.target != 'string' || !route.proxy.target.length) {
+                throw new ConfigError('route.proxy.target must be a non-empty string')
+            }
+            for (var opt of ['prependPath', 'ignorePath', 'xfwd', 'autoRewrite', 'changeOrigin']) {
+                if (opt in route.proxy) {
+                    if (typeof route.proxy[opt] != 'boolean') {
+                        throw new ConfigError('route.proxy.' + opt + ' must be a boolean')
+                    }
+                }
+            }
+        } else {
+            if (typeof route.fixedResponse != 'object' || Array.isArray(route.fixedResponse)) {
+                throw new ConfigError('route.fixedResponse must be an object')
+            }
+            if (typeof route.fixedResponse.code != 'number') {
+                throw new ConfigError('route.fixedResponse.code must be a number')
+            }
+            if (typeof route.fixedResponse.text != 'string' || !route.fixedResponse.text.length) {
+                throw new ConfigError('route.fixedResponse.text must be a non-empty string')
+            }
+        }
+
         if ('hosts' in route) {
             if (!Array.isArray(route.hosts)) {
                 throw new ConfigError('route.hosts must be an array')
@@ -511,6 +556,13 @@ class App {
             }
         }
         return index
+    }
+
+    setConfigFiles(env) {
+        this.opts.tokensFile = this.opts.tokensFile || resolve(this.opts.configDir, env.TOKENS_FILE || 'tokens.yaml')
+        this.opts.usersFile  = this.opts.usersFile  || resolve(this.opts.configDir, env.USERS_FILE  || 'users.yaml')
+        this.opts.routesFile = this.opts.routesFile || resolve(this.opts.configDir, env.ROUTES_FILE || 'routes.yaml')
+        this.opts.rolesFile  = this.opts.rolesFile  || resolve(this.opts.configDir, env.ROLES_FILE  || 'roles.yaml')
     }
 }
 

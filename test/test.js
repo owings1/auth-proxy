@@ -12,6 +12,7 @@ const YAML = require('yaml')
 const App = require('../src/app')
 
 const appUrl = 'http://localhost:' + (+process.env.HTTP_PORT || 8080)
+const metricsUrl = 'http://localhost:' + (+process.env.METRICS_PORT || 8181)
 
 const upstreamServer = http.createServer((req, res) => {
     res.writeHead(200)
@@ -39,8 +40,11 @@ function newApp(configName, opts, env) {
 
 function hackRoutes(app) {
     // hack routes
+    const realTarget = 'http://localhost:' + upstreamPort
     for (var route of app.routes) {
-        route.proxy.target = 'http://localhost:' + upstreamPort
+        if (route.proxy) {
+            route.proxy.target = route.proxy.target.replace('dummy-target', realTarget)
+        }
     }
 }
 
@@ -179,6 +183,18 @@ describe('proxy', () => {
             const res = await fetch(appUrl + '/hostroute')
             expect(res.status).to.equal(401)
         })
+
+        it('should return 200 with fixed response for /health', async () => {
+            const res = await fetch(appUrl + '/health')
+            const text = await res.text()
+            expect(res.status).to.equal(200)
+            expect(text).to.equal('200 HEALTH OK')
+        })
+
+        it('should serve metrics', async () => {
+            const res = await fetch(metricsUrl + '/metrics')
+            expect(res.status).to.equal(200)
+        })
     })
 })
 
@@ -245,7 +261,7 @@ describe('app', () => {
             expect(err.name).to.equal('ConfigError')
         })
 
-        it('should throw on missing proxy', () => {
+        it('should throw on missing proxy and fixedResponse', () => {
             const err = getError(() => app.validateRoute({path: '/'}))
             expect(err.name).to.equal('ConfigError')
         })
@@ -258,6 +274,40 @@ describe('app', () => {
         it('should throw on missing proxy target', () => {
             const err = getError(() => app.validateRoute({path: '/', proxy: {}}))
             expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on both proxy and fixedResponse', () => {
+            const err = getError(() => app.validateRoute({path: '/', proxy: {target: 'abc'}, fixedResponse: {code: 200, text: 'abc'}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on fixedResponse is array', () => {
+            const err = getError(() => app.validateRoute({path: '/', fixedResponse: []}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on fixedResponse missing code', () => {
+            const err = getError(() => app.validateRoute({path: '/', fixedResponse: {text: 'abc'}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on fixedResponse missing text', () => {
+            const err = getError(() => app.validateRoute({path: '/', fixedResponse: {code: 200}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on fixedResponse code is text', () => {
+            const err = getError(() => app.validateRoute({path: '/', fixedResponse: {code: '200', text: 'abc'}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should throw on fixedResponse text is number', () => {
+            const err = getError(() => app.validateRoute({path: '/', fixedResponse: {code: 200, text: 200}}))
+            expect(err.name).to.equal('ConfigError')
+        })
+
+        it('should accept valid fixedResponse', () => {
+            app.validateRoute({path: '/', fixedResponse: {code: 200, text: 'OK'}})
         })
 
         it('should throw on null hosts', () => {
