@@ -55,6 +55,10 @@ const metrics = {
         name: 'internal_errors_total',
         help: 'Total internal errors',
         labelNames: ['code']
+    }),
+    configError: new prom.Gauge({
+        name: 'is_config_error',
+        help: 'Configuration load error'
     })
 }
 
@@ -109,7 +113,7 @@ class App {
         this.grantIndex = null
 
         this.lastReloadTime  = null
-        this.lastReloadMTime = null
+        this.lastConfigReadTime = null
         this.reloadInterval  = null
         this.isReloading     = false
 
@@ -135,8 +139,8 @@ class App {
                 handler(req, res)
             } catch (err) {
                 this.error(err)
+                metrics.internalErrors.inc({code: 500})
                 try {
-                    metrics.internalErrors.inc({code: 500})
                     res.writeHead(500).end('500 Internal Error')
                 } catch (err) {
                     this.error(err)
@@ -187,17 +191,7 @@ class App {
         } else {
 
             req.target = route.proxy.target
-
-            // https://www.npmjs.com/package/http-proxy#options
-            const proxyOpts = {
-                // default true
-                prependPath  : ('prependPath' in route.proxy) ? !!route.proxy.prependPath : true,
-                xfwd         : ('xfwd' in route.proxy)        ? !!route.proxy.xfwd        : true,
-                // default false
-                autoRewrite  : !!route.proxy.autoRewrite,
-                ignorePath   : !!route.proxy.ignorePath,
-                changeOrigin : !!route.proxy.changeOrigin
-            }
+            const proxyOpts = App.getProxyOpts(route.proxy)
 
             this.httpProxy.web(req, res, {...proxyOpts, target: req.target})
 
@@ -209,7 +203,7 @@ class App {
             res.writeHead(200).end('OK Ready')
             return
         }
-        res.setHeader('content-type', prom.register.contentType)
+        res.setHeader('Content-Type', prom.register.contentType)
         prom.register.metrics().then(metrics => res.writeHead(200).end(metrics))
     }
 
@@ -217,9 +211,10 @@ class App {
         await this.reloadConfig()
         if (this.opts.reloadIntervalMs > 0) {
             this.reloadInterval = setInterval(() => {
-                if (!this.isReloading) {
-                    this.reloadConfig()
-                }
+                this.reloadConfig().catch(err => {
+                    this.error('Config reload error', err)
+                    metrics.configError.set(1)
+                })
             }, Math.max(this.opts.reloadIntervalMs, 1000))
         }
         this.httpServer.listen(this.opts.port)
@@ -228,7 +223,7 @@ class App {
         this.log('Metrics listening', this.metricsServer.address())
     }
 
-    close() {
+    async close() {
         clearInterval(this.reloadInterval)
         this.httpServer.close()
         this.metricsServer.close()
@@ -402,6 +397,10 @@ class App {
 
     async reloadConfig() {
 
+        if (this.isReloading) {
+            return
+        }
+
         this.isReloading = true
 
         const routesHandle = await fs.open(this.opts.routesFile)
@@ -418,11 +417,11 @@ class App {
                 (await tokensHandle.stat()).mtimeMs
             ])
 
-            if (this.lastReloadMTime && this.lastReloadMTime == maxMTime) {
+            if (this.lastConfigReadTime && this.lastConfigReadTime == maxMTime) {
                 return
             }
 
-            this.lastReloadMTime = maxMTime
+            this.lastConfigReadTime = maxMTime
 
             const routesObj = YAML.parse(await routesHandle.readFile('utf-8'))
             if (!routesObj.routes || !Array.isArray(routesObj.routes)) {
@@ -470,15 +469,15 @@ class App {
                 tokens : this.tokens.length
             })
 
+            this.lastReloadTime = +new Date
+            this.lastReloadErrorTime = null
+            metrics.configError.set(0)
+
         } catch (err) {
 
             this.lastReloadErrorTime = +new Date
-
-            if (!this.lastReloadTime) {
-                throw err
-            }
-
-            error(err)
+            metrics.configError.set(1)
+            throw err
 
         } finally {
 
@@ -488,8 +487,6 @@ class App {
             tokensHandle.close()
 
             this.isReloading = false
-            this.lastReloadTime = +new Date
-            this.lastReloadErrorTime = null
         }
     }
 
@@ -563,6 +560,19 @@ class App {
         this.opts.usersFile  = this.opts.usersFile  || resolve(this.opts.configDir, env.USERS_FILE  || 'users.yaml')
         this.opts.routesFile = this.opts.routesFile || resolve(this.opts.configDir, env.ROUTES_FILE || 'routes.yaml')
         this.opts.rolesFile  = this.opts.rolesFile  || resolve(this.opts.configDir, env.ROLES_FILE  || 'roles.yaml')
+    }
+
+    static getProxyOpts(proxy = {}) {
+        // https://www.npmjs.com/package/http-proxy#options
+        return {
+            // default true
+            prependPath  : ('prependPath' in proxy) ? !!proxy.prependPath : true,
+            xfwd         : ('xfwd' in proxy)        ? !!proxy.xfwd        : true,
+            // default false
+            autoRewrite  : !!proxy.autoRewrite,
+            ignorePath   : !!proxy.ignorePath,
+            changeOrigin : !!proxy.changeOrigin
+        }
     }
 }
 
