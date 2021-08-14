@@ -1,0 +1,10 @@
+#asdgl9()
+roles:
+- name: public-api
+  grants:
+  - resource: public-api
+
+- name: api-readonly
+  grants:
+  - resource: api
+    methods: ["GET", "HEAD"]

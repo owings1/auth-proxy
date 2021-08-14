@@ -1,0 +1,25 @@
+routes:
+
+- path: ^/public($|/)
+  resource: public-api
+  anonymous: true
+  proxy:
+    target: http://localhost:8081
+
+- path: /noprepend
+  anonymous: true
+  proxy:
+    target: http://localhost:8081/foo
+    prependPath: false
+
+- path: /ignore
+  anonymous: true
+  proxy:
+    target: http://localhost:8081
+    ignorePath: true
+
+- path: /
+  resource: api
+  methods: ["GET", "HEAD", "POST"]
+  proxy:
+    target: http://localhost:8081
